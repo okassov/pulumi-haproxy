@@ -19,6 +19,7 @@ export interface HAProxyApiParams {
     apiAddress: string;
     apiPort: string;
     apiPassword: string;
+    apiUsername: string;
 }
 
 export interface HAProxyArgs {
@@ -40,13 +41,19 @@ export class HAProxy extends pulumi.ComponentResource {
     constructor(name: string, args: HAProxyArgs, opts?: pulumi.ComponentResourceOptions) {
         super("okassov:haproxy", name, {}, opts);
 
-        const provOpts: pulumi.CustomResourceOptions = { parent: this, provider: opts?.provider };
+        const provOpts: pulumi.CustomResourceOptions = { parent: this };
+
+        const provider = new haproxy.Provider(`provider-${name}`, {
+            url:      `http://${args.apiConfig.apiAddress}:${args.apiConfig.apiPort}`,
+            username: args.apiConfig.apiUsername,
+            password: args.apiConfig.apiPassword,
+        }, provOpts);
 
         /* Create HAProxy Backend */
         this.backend = new haproxy.Backend(`backend-${name}`, {
             name: name,
             ...args.backend
-        }, provOpts);
+        }, { ...provOpts, provider: provider });
 
         /* Create HAProxy Backend Servers */
         args.servers.forEach(server => {
@@ -56,7 +63,7 @@ export class HAProxy extends pulumi.ComponentResource {
                 parentName:  this.backend.name,
                 parentType:  "backend",
                 ...server
-            }, { ...provOpts, parent: this.backend, dependsOn: this.backend });
+            }, { ...provOpts, parent: this.backend, dependsOn: this.backend, provider: provider });
         });
 
         /* Create HAProxy Frontend */
@@ -64,7 +71,7 @@ export class HAProxy extends pulumi.ComponentResource {
             name: name,
             backend: this.backend.name,
             ...args.frontend
-        }, { ...provOpts, dependsOn: this.backend });
+        }, { ...provOpts, dependsOn: this.backend, provider: provider });
 
         /* Create HAProxy Frontend Bind */
         this.bind = new haproxy.Bind(`bind-${name}`, {
@@ -72,7 +79,7 @@ export class HAProxy extends pulumi.ComponentResource {
             parentName: this.frontend.name,
             parentType: "frontend",
             ...args.bind
-        }, { ...provOpts, parent: this.frontend, dependsOn: this.frontend });
+        }, { ...provOpts, parent: this.frontend, dependsOn: this.frontend, provider: provider });
 
         /* Create HAProxy Bind custom Accept-Proxy param */
         if (args.customBindParams?.acceptProxy) {
@@ -80,7 +87,7 @@ export class HAProxy extends pulumi.ComponentResource {
                 create: pulumi.interpolate`#!/usr/bin/env bash
                     set -euo pipefail
 
-                    AUTH="admin:${args.apiConfig.apiPassword}"
+                    AUTH="${args.apiConfig.apiUsername}:${args.apiConfig.apiPassword}"
                     HOST="${args.apiConfig.apiAddress}"
                     PORT="${args.apiConfig.apiPort}"
 
