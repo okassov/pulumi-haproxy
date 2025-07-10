@@ -16,10 +16,10 @@ export interface CustomFrontendArgs extends Omit<haproxy.FrontendArgs, "backend"
 export interface CustomBindArgs extends Omit<haproxy.BindArgs, "parentName" | "parentType"> {}
 
 export interface HAProxyApiParams {
-    apiAddress: string;
-    apiPort: string;
-    apiPassword: string;
-    apiUsername: string;
+    apiAddress: pulumi.Input<string>;
+    apiPort: pulumi.Input<string>;
+    apiPassword: pulumi.Input<string>;
+    apiUsername: pulumi.Input<string>;
 }
 
 export interface HAProxyArgs {
