@@ -25,7 +25,7 @@
   "scripts": {
     "clean": "rm -rf dist",
     "build": "npm run clean && tsc",
-    "prepare": "npm run build && cd sdks/haproxy && npm install && npm run build && cd ../..",
+    "prepare": "npm run build",
     "test": "echo \"No tests specified\" && exit 0" 
   },
   "devDependencies": {
