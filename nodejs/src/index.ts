@@ -101,7 +101,7 @@ export class HAProxy extends pulumi.ComponentResource {
                     PAYLOAD=$(cat <<EOF
                     {
                     "name": "$BIND",
-                    "address": $BIND_ADDR,
+                    "address": "$BIND_ADDR",
                     "port": $BIND_PORT,
                     "accept_proxy": true
                     }
