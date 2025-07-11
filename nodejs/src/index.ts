@@ -34,7 +34,7 @@ export interface HAProxyArgs {
 export class HAProxy extends pulumi.ComponentResource {
 
     public readonly backend: haproxy.Backend;
-    public readonly servers: haproxy.Server[];
+    public readonly servers: haproxy.Server[] = [];
     public readonly frontend: haproxy.Frontend;
     public readonly bind: haproxy.Bind;
 
