@@ -1,129 +1,141 @@
-# HAProxy Module for Pulumi
+# HAProxy Module for Pulumi [![npm version](https://badge.fury.io/js/%40okassov%2Fpulumi-haproxy.svg)](https://www.npmjs.com/package/%40okassov%2Fpulumi-haproxy) [![License: MPL-2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://mozilla.org/MPL/2.0/)
 
-> **A thin, opinionated wrapper around the `@pulumi/haproxy` provider that builds the whole chain _Backend → Servers → Frontend → Bind_ in one line of code.**
+> **Pulumi Component for managing HAProxy configuration through the HAProxy Data‑Plane API (DPA).**\
+> Create *Backend → Servers → Frontend → Bind* chains declaratively – all in a single Pulumi resource.
 
----
+## Table of Contents
+
+1. [Features](#features)
+2. [Installation](#installation)
+3. [Quick Start](#quick-start)
+4. [Inputs](#inputs)
+5. [Outputs](#outputs)
+6. [Examples](#examples)
+7. [License](#license)
 
 ## Features
 
-* **One component, four resources** – create a complete HAProxy chain at once.  
-* **Zero boilerplate** – automatic names, dependency ordering and outputs.  
-* **Day-2 tuning** – optional patch step that toggles `accept-proxy` via the Data-Plane API.  
-* **100 % provider args** – pass native `haproxy.*Args`; nothing is re-invented.
-
----
+- **Single call ⇒ complete service** – define *backend*, *servers*, *frontend* and *bind* in one object.
+- **Multiple services in one stack** – pass an array of services; component guarantees a conflict‑free sequential apply.
+- **Shared provider cache** – all component instances talking to the same DPA share one Pulumi provider instance.
+- **Custom bind parameters** – send *any* additional JSON fields (e.g. `accept_proxy`, `ssl`, `maxconn`, …) without changing code.
+- **Automatic name prefixing** – resource names are vendor‑prefixed with component name to avoid collisions across stacks.
 
 ## Installation
 
 ```bash
-npm install --save "@okassov/pulumi-haproxy"
-# or
-yarn add "@okassov/pulumi-haproxy"
+npm install @okassov/pulumi-haproxy
 ```
 
----
+> Requires **Pulumi v3.115+** and Node 18+.
 
-## Prerequisites
-
-| Tool              | Min&nbsp;Version | Notes                                                    |
-|-------------------|-----------------:|----------------------------------------------------------|
-| Node.js           | 14.x             | Tested up to 20.x                                        |
-| Pulumi CLI        | 3.x              |                                                          |
-| HAProxy           | 2.4              | Data-Plane API must be enabled (e.g. `:5555`)            |
-| `@pulumi/haproxy` | 0.3.0            | Or newer                                                 |
-
----
-
-## Data-Plane API config (only if you patch `accept-proxy`)
-
-```bash
-pulumi config set haproxy:username admin
-pulumi config set haproxy:password S3cr3t --secret
-pulumi config set haproxy:address 10.129.51.140
-pulumi config set haproxy:port    5555
-```
-
----
-
-## Quick start
+## Quick Start
 
 ```ts
-import * as pulumi from "@pulumi/pulumi";
-import { HAProxy } from "@okassov/pulumi-haproxy";
+import { HAProxyStack } from "@okassov/pulumi-haproxy";
 
-const masters = [
-  { name: "k8s-m1", ip: "10.0.0.11", port: 6443 },
-  { name: "k8s-m2", ip: "10.0.0.12", port: 6443 },
-  { name: "k8s-m3", ip: "10.0.0.13", port: 6443 },
-];
+const k8sNodes = [
+  { name: "k8s-node-01", ip: "10.1.1.101" },
+  { name: "k8s-node-02", ip: "10.1.1.102" },
+  { name: "k8s-node-03", ip: "10.1.1.103" },
+]
 
-const kubeApi = new HAProxy("kube-api", {
-  /* Data-Plane API creds — required only when acceptProxy=true */
+const haproxy = new HAProxyStack("ingress-gw", {
   apiConfig: {
-    apiAddress: "10.129.51.140",
-    apiPort:    "5555",
-    apiPassword: pulumi.secret("S3cr3t"),
+    apiAddress : "10.1.1.100",
+    apiPort    : 5555,
+    apiUsername: "admin",
+    apiPassword: pulumi.secret("super‑secret")
   },
-
-  backend: {
-    mode: "tcp",
-    balances: [{ algorithm: "roundrobin" }],
-    timeoutConnect: "5s",
-    timeoutClient:  "30s",
-    timeoutServer:  "30s",
-  },
-
-  servers: masters,
-
-  frontend: {
-    mode:  "tcp",
-    tcplog: true,
-  },
-
-  bind: {
-    address: "0.0.0.0",
-    port:    6443,
-  },
-
-  customBindParams: { acceptProxy: true },
+  services: [
+    {
+      name: "http",
+      backend : { mode: "tcp", balances: [{ algorithm: "roundrobin" }] },
+      servers : k8sNodes.map(n => ({ name:n.name, ip:n.ip, port:30080, check:true, sendProxy:true })),
+      frontend: { mode: "tcp", tcplog:true },
+      bind    : { address:"0.0.0.0", port:80 },
+      customBindParams: { accept_proxy:true }
+    },
+    {
+      name: "https",
+      backend : { mode: "tcp", balances: [{ algorithm: "roundrobin" }] },
+      servers : k8sNodes.map(n => ({ name:n.name, ip:n.ip, port:30443, check:true, sendProxy:true })),
+      frontend: { mode: "tcp", tcplog:true },
+      bind    : { address:"0.0.0.0", port:443 },
+      customBindParams: { accept_proxy:true, ssl:"enabled" }
+    }
+  ]
 });
 ```
 
-### Stack outputs
+Run:
 
-| Output            | Description                      |
-|-------------------|----------------------------------|
-| `backendName`     | HAProxy backend name             |
-| `frontendName`    | HAProxy frontend name            |
-| `bindAddr`/`Port` | Listening address and port       |
+```bash
+pulumi up
+```
 
----
+## Inputs
 
-## Component arguments
+| Field             | Type                   | Required | Description                                |
+| ----------------- | ---------------------- | -------- | ------------------------------------------ |
+| `apiConfig`       | `HAProxyApiParams`     | **Yes**  | DPA connection credentials.                |
+|   • `apiAddress`  | `string`               | Yes      | IP / DNS of HAProxy DPA.                   |
+|   • `apiPort`     | `number\|string`       | Yes      | DPA port (usually `5555`).                 |
+|   • `apiUsername` | `string`               | Yes      | HTTP‑basic user.                           |
+|   • `apiPassword` | `string`               | Yes      | HTTP‑basic password (use `pulumi.secret`). |
+| `services`        | `HAProxyServiceArgs[]` | **Yes**  | Array of service definitions.              |
 
-| Field              | Type                         | Required | Description                                                         |
-|--------------------|------------------------------|:--------:|---------------------------------------------------------------------|
-| `apiConfig`        | `HAProxyApiParams`           | *\*¹*   | Data-Plane API details; needed only when `customBindParams` used    |
-| `backend`          | `haproxy.BackendArgs`        | ✔        | Any backend parameters supported by the provider                    |
-| `servers`          | `CustomServerArgs[]`         | ✔        | One element per upstream node                                       |
-| `frontend`         | `CustomFrontendArgs`         | ✔        | Extra frontend options (ACLs, SSL, logs, …)                         |
-| `bind`             | `CustomBindArgs`             | ✔        | Bind address, port and other `BindArgs` fields                      |
-| `customBindParams` | `{ acceptProxy: boolean }`   | ✖        | Day-2 patch to enable PROXY protocol on the bind                    |
+**`HAProxyServiceArgs`**
 
-*\*¹ Required only when `customBindParams.acceptProxy` is `true`.*
+| Field              | Type                                          | Required | Description                                        |
+| ------------------ | --------------------------------------------- | -------- | -------------------------------------------------- |
+| `name`             | `string`                                      | **Yes**  | Logical name; reused for backend & frontend.       |
+| `backend`          | `haproxy.BackendArgs`                         | **Yes**  | Direct mapping to DPA backend args.                |
+| `servers`          | `CustomServerArgs[]`                          | **Yes**  | Servers behind backend; `ip` instead of `address`. |
+| `frontend`         | `CustomFrontendArgs`                          | **Yes**  | Frontend spec (without `backend`).                 |
+| `bind`             | `CustomBindArgs`                              | **Yes**  | Bind spec (without `parentName` / `parentType`).   |
+| `customBindParams` | `Record<string, string \| number \| boolean>` | No       | Arbitrary extra JSON fields added to bind patch.   |
 
----
+## Outputs
 
-## Advanced
+| Field       | Type                      | Description                 |
+| ----------- | ------------------------- | --------------------------- |
+| `backends`  | `pulumi.Output<string>[]` | Names of created backends.  |
+| `frontends` | `pulumi.Output<string>[]` | Names of created frontends. |
 
-* **TLS termination** – attach certificates in `bind.ssl` or create a dedicated HTTPS frontend.  
-* **Health checks** – override per-server `check*` fields.  
-* **Dynamic ACL routing** – extend `frontend` with your own `use_backend` rules.
+## Examples
 
----
+### Minimal HTTP‐only
 
-## Roadmap
+```ts
+new HAProxyStack("api-edge", {
+  apiConfig: {/* … */},
+  services: [{
+    name: "http",
+    backend : { mode:"http" },
+    servers : [{ name:"svc", ip:"10.0.0.10", port:8080 }],
+    frontend: { mode:"http" },
+    bind    : { address:"0.0.0.0", port:80 }
+  }]
+})
+```
 
-- [ ] Multiple binds per frontend  
-- [ ] Built-in ACL helpers (`use_backend` on SNI / path)  
-- [ ] Prom
+### TCP LB with custom params
+
+```ts
+new HAProxyStack("db-tcp", {
+  apiConfig: {/* … */},
+  services: [{
+    name: "pgsql",
+    backend : { mode:"tcp" },
+    servers : dbNodes.map(n => ({ name:n.id, ip:n.ip, port:5432, check:true })),
+    frontend: { mode:"tcp" },
+    bind    : { address:"10.10.10.2", port:5432 },
+    customBindParams: { accept_proxy:true, maxconn:2000 }
+  }]
+})
+```
+
+## License
+
+Apache 2.0 – see [`LICENSE`](./LICENSE).

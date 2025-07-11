@@ -2,7 +2,7 @@ import * as pulumi from "@pulumi/pulumi";
 import * as haproxy from "@pulumi/haproxy";
 import * as command from "@pulumi/command";
 
-/** Любые дополнительные поля, которые разрешает HAProxy Bind API. */
+/** Произвольные дополнительные поля для Bind */
 export type CustomBindParams = Record<string, string | number | boolean>
 
 export interface CustomServerArgs extends Omit<haproxy.ServerArgs,
@@ -43,7 +43,7 @@ export class HAProxyStack extends pulumi.ComponentResource {
   constructor(name: string, args: HAProxyStackArgs, opts?: pulumi.ComponentResourceOptions) {
     super("okassov:haproxy:Stack", name, {}, opts)
 
-    /* 1. shared provider per host:port */
+    /* 1. Shared provider per API host:port */
     const apiKey = `${args.apiConfig.apiAddress}:${args.apiConfig.apiPort}`
     const resOpts: pulumi.CustomResourceOptions = { parent: this }
 
@@ -57,15 +57,16 @@ export class HAProxyStack extends pulumi.ComponentResource {
       HAProxyStack.providers.set(apiKey, provider)
     }
 
-    /* очередь компонентов для данного API */
     let waitFor: pulumi.Resource | undefined = HAProxyStack.lastForApi.get(apiKey)
 
     const backends : pulumi.Output<string>[] = []
     const frontends: pulumi.Output<string>[] = []
 
     for (const svc of args.services) {
+      const prefix = `${name}-${svc.name}`
 
-      const backend = new haproxy.Backend(`backend-${svc.name}`, {
+      /* Backend */
+      const backend = new haproxy.Backend(`backend-${prefix}`, {
         name: svc.name,
         ...svc.backend,
       }, {
@@ -76,7 +77,7 @@ export class HAProxyStack extends pulumi.ComponentResource {
 
       let prev: pulumi.Resource = backend
       for (const srv of svc.servers) {
-        const sRes = new haproxy.Server(`backendServer-${svc.name}-${srv.ip.replace(/\./g, "-")}`, {
+        const sRes = new haproxy.Server(`backendServer-${prefix}-${srv.ip.replace(/\./g, "-")}`, {
           ...srv,
           address   : srv.ip,
           parentName: backend.name,
@@ -90,7 +91,7 @@ export class HAProxyStack extends pulumi.ComponentResource {
         prev = sRes
       }
 
-      const frontend = new haproxy.Frontend(`frontend-${svc.name}`, {
+      const frontend = new haproxy.Frontend(`frontend-${prefix}`, {
         name   : svc.name,
         backend: backend.name,
         ...svc.frontend,
@@ -100,7 +101,7 @@ export class HAProxyStack extends pulumi.ComponentResource {
         dependsOn: prev,
       })
 
-      const bind = new haproxy.Bind(`bind-${svc.name}`, {
+      const bind = new haproxy.Bind(`bind-${prefix}`, {
         name      : svc.name,
         parentName: frontend.name,
         parentType: "frontend",
@@ -112,7 +113,7 @@ export class HAProxyStack extends pulumi.ComponentResource {
         dependsOn: frontend,
       })
 
-      /* Optional custom patch -------------------------------------------------- */
+      /* Optional custom params patch */
       let last: pulumi.Resource = bind
       if (svc.customBindParams && Object.keys(svc.customBindParams).length > 0) {
         const extraJson = Object.entries(svc.customBindParams)
@@ -122,7 +123,7 @@ export class HAProxyStack extends pulumi.ComponentResource {
           })
           .join(", ")
 
-        const cmd = new command.local.Command(`patch-bind-${svc.name}` , {
+        const cmd = new command.local.Command(`patch-bind-${prefix}`, {
           create: pulumi.interpolate`#!/usr/bin/env bash
             set -euo pipefail
             AUTH="${args.apiConfig.apiUsername}:${args.apiConfig.apiPassword}"
@@ -137,9 +138,9 @@ export class HAProxyStack extends pulumi.ComponentResource {
         last = cmd
       }
 
-      /* очередь продолжается */
+      /* update queue */
       waitFor = last
-      backends.push(backend.name)
+      backends .push(backend.name)
       frontends.push(frontend.name)
     }
 
